@@ -1,0 +1,484 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
+)
+
+from dotenv import load_dotenv
+import os
+import requests
+
+
+# =========================================
+# LOAD ENV
+# =========================================
+
+load_dotenv()
+
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+API_URL = "http://127.0.0.1:8000"
+
+
+# =========================================
+# START
+# =========================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text(
+        "👋 Welcome to Content Saathi!\n\n"
+        "Available Commands:\n\n"
+        "/draft - View latest draft\n"
+        "/generate - Generate new AI post"
+    )
+
+
+# =========================================
+# GENERATE NEW POST
+# =========================================
+
+async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text(
+        "🤖 Generating today's content...\n\n"
+        "Please wait..."
+    )
+
+    try:
+
+        response = requests.post(
+            API_URL + "/generate"
+        )
+
+        if response.status_code != 200:
+
+            await update.message.reply_text(
+                "❌ Content generation failed."
+            )
+
+            return
+
+        result = response.json()
+
+        if result.get("status") == "ERROR":
+
+            await update.message.reply_text(
+                "❌ AI content generation failed.\n\n"
+                + str(result.get("error", "Unknown error"))
+            )
+
+            return
+
+        post_id = result["post_id"]
+        content = result["content"]
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "✅ Approve",
+                    callback_data=f"approve_{post_id}"
+                ),
+                InlineKeyboardButton(
+                    "🔄 Regenerate",
+                    callback_data=f"regenerate_{post_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ Reject",
+                    callback_data=f"reject_{post_id}"
+                )
+            ]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message = (
+            "📝 *Today's Content Draft*\n\n"
+            f"{content}\n\n"
+            "📌 Status: *DRAFT*\n"
+            f"🆔 Post ID: {post_id}"
+        )
+
+        await update.message.reply_text(
+            message,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+
+        print("Generate Error:", e)
+
+        await update.message.reply_text(
+            "❌ Cannot connect to Content Saathi API.\n\n"
+            "Make sure FastAPI is running."
+        )
+
+
+# =========================================
+# VIEW DRAFT
+# =========================================
+
+async def draft(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    try:
+
+        response = requests.get(
+            API_URL + "/drafts"
+        )
+
+        if response.status_code != 200:
+
+            await update.message.reply_text(
+                "❌ Unable to fetch draft."
+            )
+
+            return
+
+        drafts = response.json()
+
+        if not drafts:
+
+            await update.message.reply_text(
+                "📭 No draft available.\n\n"
+                "Use /generate to create a new draft."
+            )
+
+            return
+
+        # Latest draft
+        post = drafts[0]
+
+        post_id = post["id"]
+        content = post["content"]
+        status = post["status"]
+
+        message = (
+            "📝 *Today's Content Draft*\n\n"
+            f"{content}\n\n"
+            f"📌 Status: *{status}*\n"
+            f"🆔 Post ID: {post_id}"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "✅ Approve",
+                    callback_data=f"approve_{post_id}"
+                ),
+                InlineKeyboardButton(
+                    "🔄 Regenerate",
+                    callback_data=f"regenerate_{post_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ Reject",
+                    callback_data=f"reject_{post_id}"
+                )
+            ]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            message,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+
+        print("Draft Error:", e)
+
+        await update.message.reply_text(
+            "❌ Error connecting to Content Saathi API."
+        )
+
+
+# =========================================
+# BUTTON HANDLER
+# =========================================
+
+async def button_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    data = query.data
+
+
+    # =====================================
+    # APPROVE
+    # =====================================
+
+    if data.startswith("approve_"):
+
+        post_id = data.split("_")[1]
+
+        response = requests.put(
+            API_URL + f"/approve/{post_id}"
+        )
+
+        if response.status_code == 200:
+
+            result = response.json()
+
+            if result.get("status") == "APPROVED":
+
+                await query.edit_message_text(
+                    "✅ *Post Approved Successfully!*\n\n"
+                    "The draft has been marked as APPROVED.",
+                    parse_mode="Markdown"
+                )
+
+            else:
+
+                await query.edit_message_text(
+                    "❌ Post could not be approved."
+                )
+
+        else:
+
+            await query.edit_message_text(
+                "❌ Unable to approve the post."
+            )
+
+
+    # =====================================
+    # REJECT
+    # =====================================
+
+    elif data.startswith("reject_"):
+
+        post_id = data.split("_")[1]
+
+        response = requests.put(
+            API_URL + f"/reject/{post_id}"
+        )
+
+        if response.status_code == 200:
+
+            result = response.json()
+
+            if result.get("status") == "REJECTED":
+
+                await query.edit_message_text(
+                    "❌ *Post Rejected*\n\n"
+                    "The draft has been marked as REJECTED.",
+                    parse_mode="Markdown"
+                )
+
+            else:
+
+                await query.edit_message_text(
+                    "❌ Post could not be rejected."
+                )
+
+        else:
+
+            await query.edit_message_text(
+                "❌ Unable to reject the post."
+            )
+
+
+    # =====================================
+    # REGENERATE
+    # =====================================
+
+    elif data.startswith("regenerate_"):
+
+     post_id = data.split("_", 1)[1]
+
+    await query.edit_message_text(
+        "🔄 Generating a new post...\n\n"
+        "Please wait..."
+    )
+
+    try:
+
+        response = requests.post(
+            API_URL + f"/regenerate/{post_id}",
+            timeout=60
+        )
+
+        if response.status_code == 200:
+
+            result = response.json()
+
+            print("Regenerate API Response:", result)
+
+            if result.get("status") == "ERROR":
+
+                await query.edit_message_text(
+                    "❌ Unable to generate new post."
+                )
+
+                return
+
+            # Get Post ID safely
+            new_post_id = (
+                result.get("new_post_id")
+                or result.get("post_id")
+            )
+
+            # Get generated content
+            content = result.get("content")
+
+            # Check API response
+            if new_post_id is None:
+
+                await query.edit_message_text(
+                    "❌ New Post ID was not returned by API."
+                )
+
+                return
+
+            if content is None:
+
+                await query.edit_message_text(
+                    "❌ New content was not returned by API."
+                )
+
+                return
+
+            # Buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "✅ Approve",
+                        callback_data=f"approve_{new_post_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "🔄 Regenerate",
+                        callback_data=f"regenerate_{new_post_id}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Reject",
+                        callback_data=f"reject_{new_post_id}"
+                    )
+                ]
+            ]
+
+            reply_markup = InlineKeyboardMarkup(
+                keyboard
+            )
+
+            # New draft message
+            message = (
+                "🔄 *New Draft Generated*\n\n"
+                f"{content}\n\n"
+                "📌 Status: *DRAFT*\n"
+                f"🆔 Post ID: {new_post_id}"
+            )
+
+            await query.edit_message_text(
+                message,
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+
+        else:
+
+            print(
+                "Regenerate API Error:",
+                response.status_code,
+                response.text
+            )
+
+            await query.edit_message_text(
+                "❌ Unable to regenerate the post.\n\n"
+                f"API Status: {response.status_code}"
+            )
+
+    except requests.exceptions.Timeout:
+
+        await query.edit_message_text(
+            "⏳ Content generation is taking longer than expected.\n\n"
+            "Please try Regenerate again."
+        )
+
+    except requests.exceptions.ConnectionError:
+
+        await query.edit_message_text(
+            "❌ Cannot connect to Content Saathi API.\n\n"
+            "Please make sure FastAPI is running."
+        )
+
+    except Exception as e:
+
+        print("Regenerate Error:", e)
+
+        await query.edit_message_text(
+            "❌ An unexpected error occurred.\n\n"
+            f"{str(e)}"
+        )
+# =========================================
+# MAIN
+# =========================================
+
+def main():
+
+    if not TOKEN:
+
+        print(
+            "❌ TELEGRAM_BOT_TOKEN not found in .env"
+        )
+
+        return
+
+
+    app = Application.builder().token(TOKEN).build()
+
+
+    # Commands
+
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("draft", draft)
+    )
+
+    app.add_handler(
+        CommandHandler("generate", generate)
+    )
+
+
+    # Buttons
+
+    app.add_handler(
+        CallbackQueryHandler(button_handler)
+    )
+
+
+    print("===================================")
+    print("CONTENT SAATHI TELEGRAM BOT")
+    print("===================================")
+    print("Bot is running...")
+    print("Commands:")
+    print("/start")
+    print("/draft")
+    print("/generate")
+
+
+    app.run_polling()
+
+
+# =========================================
+# RUN
+# =========================================
+
+if __name__ == "__main__":
+    main()
